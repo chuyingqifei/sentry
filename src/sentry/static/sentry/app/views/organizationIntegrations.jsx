@@ -1,198 +1,202 @@
 import React from 'react';
 
-import ApiMixin from '../mixins/apiMixin';
+import AsyncView from './asyncView';
+import DropdownLink from '../components/dropdownLink';
 import IndicatorStore from '../stores/indicatorStore';
-import LoadingIndicator from '../components/loadingIndicator';
+import MenuItem from '../components/menuItem';
 import OrganizationHomeContainer from '../components/organizations/homeContainer';
-import OrganizationState from '../mixins/organizationState';
-import {t, tct} from '../locale';
+import {t} from '../locale';
+import {sortArray} from '../utils';
 
-const OrganizationIntegrations = React.createClass({
-  mixins: [ApiMixin, OrganizationState],
+export default class OrganizationIntegrations extends AsyncView {
+  getEndpoints() {
+    let {orgId} = this.props.params;
+    return [
+      ['itemList', `/organizations/${orgId}/integrations/`, {query: {status: ''}}],
+      ['config', `/organizations/${orgId}/config/integrations/`]
+    ];
+  }
 
-  getInitialState() {
-    return {
-      loading: true,
-      error: null,
-      ingtegrationList: null
-    };
-  },
+  deleteIntegration = integration => {
+    // eslint-disable-next-line no-alert
+    if (!confirm(t('Are you sure you want to remove this integration?'))) return;
 
-  componentWillMount() {
-    this.fetchData();
-  },
-
-  fetchData() {
-    this.api.request(`/organizations/${this.props.params.orgId}/integrations/`, {
-      method: 'GET',
-      success: data => {
-        this.setState({
-          ingtegrationList: data,
-          loading: false
-        });
-      },
-      error: err => {
-        this.setState({
-          loading: false,
-          error: err.responseJSON
-        });
-      }
-    });
-  },
-
-  linkAuth(providerId, auth) {
     let indicator = IndicatorStore.add(t('Saving changes..'));
-    this.api.request(`/organizations/${this.props.params.orgId}/integrations/`, {
-      method: 'POST',
-      data: {
-        provider: providerId,
-        defaultAuthId: auth.defaultAuthId,
-        integrationId: auth.integrationId
-      },
-      success: data => {
-        // TODO(jess): we should sort this alphabetically
-        let ingtegrationList = this.state.ingtegrationList.filter(provider => {
-          return provider.id !== data.id;
-        });
-        ingtegrationList.push(data);
-        this.setState({
-          ingtegrationList
-        });
-      },
-      error: err => {
-        this.setState({
-          loading: false,
-          error: err.responseJSON
-        });
-      },
-      complete: () => {
-        IndicatorStore.remove(indicator);
+    this.api.request(
+      `/organizations/${this.props.params.orgId}/integrations/${integration.id}/`,
+      {
+        method: 'DELETE',
+        success: data => {
+          let itemList = this.state.itemList;
+          itemList.forEach(item => {
+            if (item.id === data.id) {
+              item.status = data.status;
+            }
+          });
+          this.setState({
+            itemList
+          });
+        },
+        error: () => {
+          IndicatorStore.add(t('An error occurred.'), 'error', {
+            duration: 3000
+          });
+        },
+        complete: () => {
+          IndicatorStore.remove(indicator);
+        }
       }
-    });
-  },
-
-  toggleAuth(providerId, auth) {
-    if (auth.linked) {
-      this.disableAuth(providerId, auth);
-    } else {
-      this.linkAuth(providerId, auth);
-    }
-  },
-
-  disableAuth(providerId, auth) {
-    // TODO(jess): implement this + endpoint
-  },
-
-  renderProvider(provider) {
-    let authUrl = provider.authUrl;
-    if (authUrl.indexOf('?') === -1) {
-      authUrl += '?next=' + encodeURIComponent(document.location.pathname);
-    } else {
-      authUrl += '&next=' + encodeURIComponent(document.location.pathname);
-    }
-    return (
-      <div key={provider.id}>
-        <div className="row">
-          <div className="col-md-6">
-            <h3>{provider.name}</h3>
-          </div>
-          <div className="col-md-6">
-            {/* TODO(jess): we might want to only show this in certain
-             situations/have diff providers be able to customize this more */}
-            <a className="btn btn-default btn-sm" href={authUrl}>
-              {t('Link another account')}
-            </a>
-          </div>
-        </div>
-        {provider.auths.length
-          ? provider.auths.map(auth => {
-              return (
-                <div className="row" key={auth.externalId}>
-                  <div className="col-md-6">
-                    {auth.externalId}
-                  </div>
-                  <div className="col-md-6">
-                    <button
-                      className="btn btn-sm btn-primary"
-                      onClick={this.toggleAuth.bind(this, provider.id, auth)}>
-                      {auth.linked ? t('Disable') : t('Enable')}
-                    </button>
-                  </div>
-                </div>
-              );
-            })
-          : <span>No available auth methods</span>}
-      </div>
     );
-  },
+  };
+
+  cancelDelete = integration => {
+    let indicator = IndicatorStore.add(t('Saving changes..'));
+    this.api.request(
+      `/organizations/${this.props.params.orgId}/integrations/${integration.id}/`,
+      {
+        method: 'PUT',
+        data: {status: 'visible'},
+        success: data => {
+          let itemList = this.state.itemList;
+          itemList.forEach(item => {
+            if (item.id === data.id) {
+              item.status = data.status;
+            }
+          });
+          this.setState({
+            itemList
+          });
+        },
+        error: () => {
+          IndicatorStore.add(t('An error occurred.'), 'error', {
+            duration: 3000
+          });
+        },
+        complete: () => {
+          IndicatorStore.remove(indicator);
+        }
+      }
+    );
+  };
+
+  onAddIntegration = integration => {
+    let itemList = this.state.itemList;
+    itemList.push(integration);
+    this.setState({
+      itemList: sortArray(itemList, item => item.name)
+    });
+  };
+
+  launchAddIntegration = integration => {};
+
+  getStatusLabel(integration) {
+    switch (integration.status) {
+      case 'pending_deletion':
+        return 'Deletion Queued';
+      case 'deletion_in_progress':
+        return 'Deletion in Progress';
+      case 'hidden':
+        return 'Disabled';
+      default:
+        return null;
+    }
+  }
+
+  getTitle() {
+    return 'Repositories';
+  }
 
   renderBody() {
-    let orgFeatures = new Set(this.getOrganization().features);
+    let itemList = this.state.itemList;
 
-    if (!orgFeatures.has('integrations-v3')) {
-      return (
-        <div className="alert alert-warning m-b-1">
-          {t("Nothing to see here. You don't have access to this feature yet.")}
-        </div>
-      );
-    }
-
-    if (this.state.loading) return <LoadingIndicator />;
-
-    let error = this.state.error;
-    if (error) {
-      if (error.error_type === 'auth') {
-        let authUrl = error.auth_url;
-        if (authUrl.indexOf('?') === -1) {
-          authUrl += '?next=' + encodeURIComponent(document.location.pathname);
-        } else {
-          authUrl += '&next=' + encodeURIComponent(document.location.pathname);
-        }
-        return (
-          <div>
-            <div className="alert alert-warning m-b-1">
-              {'You need to associate an identity with ' +
-                error.title +
-                ' before you can create issues with this service.'}
-            </div>
-            <a className="btn btn-primary" href={authUrl}>
-              Associate Identity
-            </a>
-          </div>
-        );
-      } else {
-        return (
-          <div className="alert alert-error alert-block">
-            <p>
-              {error.message
-                ? error.message
-                : tct(
-                    'An unknown error occurred. Need help with this? [link:Contact support]',
-                    {
-                      link: <a href="https://sentry.io/support/" />
-                    }
-                  )}
-            </p>
-          </div>
-        );
-      }
-    }
-
-    let {ingtegrationList} = this.state;
-    return (
-      <div>
-        {ingtegrationList.map(this.renderProvider)}
-      </div>
-    );
-  },
-
-  render() {
     return (
       <OrganizationHomeContainer>
-        {this.renderBody()}
+        <div className="pull-right">
+          <DropdownLink
+            anchorRight
+            className="btn btn-primary btn-sm"
+            title={t('Add Integration')}>
+            {this.state.config.providers.map(provider => {
+              return (
+                <MenuItem noAnchor={true} key={provider.id}>
+                  <a onClick={this.launchAddIntegration.bind(this, provider)}>
+                    {provider.name}
+                  </a>
+                </MenuItem>
+              );
+            })}
+          </DropdownLink>
+        </div>
+        <h3 className="m-b-2">
+          {t('Integrations')}
+        </h3>
+        {itemList.length > 0
+          ? <div className="panel panel-default">
+              <table className="table">
+                <tbody>
+                  {itemList.map(integration => {
+                    return (
+                      <tr key={integration.id}>
+                        <td>
+                          <strong>
+                            {integration.name}
+                          </strong>
+                          {integration.status !== 'visible' &&
+                            <small>
+                              {' '}— {this.getStatusLabel(integration)}
+                            </small>}
+                          {integration.status === 'pending_deletion' &&
+                            <small>
+                              {' '}(
+                              <a onClick={this.cancelDelete.bind(this, integration)}>
+                                {t('Cancel')}
+                              </a>
+                              )
+                            </small>}
+                          <br />
+                          <small>
+                            {integration.name}
+                          </small>
+                        </td>
+                        <td style={{width: 60}}>
+                          {integration.status === 'visible'
+                            ? <button
+                                onClick={this.deleteIntegration.bind(this, integration)}
+                                className="btn btn-default btn-xs">
+                                <span className="icon icon-trash" />
+                              </button>
+                            : <button
+                                onClick={this.deleteIntegration.bind(this, integration)}
+                                disabled={true}
+                                className="btn btn-default btn-xs btn-disabled">
+                                <span className="icon icon-trash" />
+                              </button>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          : <div className="well blankslate align-center p-x-2 p-y-1">
+              <div className="icon icon-lg icon-git-commit" />
+              <h3>
+                {t('Sentry is better with friends')}
+              </h3>
+              <p>
+                {t(
+                  'Integrations allow you to pull in things like repository data or sync with an external issue tracker.'
+                )}
+              </p>
+              <p className="m-b-1">
+                <a
+                  className="btn btn-default"
+                  href="https://docs.sentry.io/learn/integrations/">
+                  Learn more
+                </a>
+              </p>
+            </div>}
       </OrganizationHomeContainer>
     );
   }
-});
-
-export default OrganizationIntegrations;
+}
